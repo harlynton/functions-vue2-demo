@@ -6,7 +6,7 @@
 
 // unzipFile.js
 const functions = require("firebase-functions");
-// const { admin } = require("./initFirestore");
+const admin = require("firebase-admin");
 const AdmZip = require("adm-zip");
 const { Storage } = require("@google-cloud/storage");
 const path = require("path");
@@ -14,6 +14,7 @@ const os = require("os");
 const fs = require("fs");
 
 const storage = new Storage();
+const db = admin.firestore();
 
 exports.unzipFile = functions.storage.object().onFinalize(async (object) => {
   const bucket = storage.bucket(object.bucket);
@@ -29,6 +30,8 @@ exports.unzipFile = functions.storage.object().onFinalize(async (object) => {
   const zip = new AdmZip(tempFilePath);
   const zipEntries = zip.getEntries();
 
+  const fileData = [];
+
   await Promise.all(
     zipEntries.map(async (zipEntry) => {
       const entryName = zipEntry.entryName;
@@ -40,11 +43,37 @@ exports.unzipFile = functions.storage.object().onFinalize(async (object) => {
         destination: newFilePath,
       });
 
+      const fileStats = fs.statSync(tempEntryPath);
+
+      fileData.push({
+        nombreArchivo: entryName,
+        pesoArchivo: fileStats.size,
+        tipoArchivo: path.extname(entryName),
+        ultimaModificacionArchivo: fileStats.mtime,
+      });
+
       fs.unlinkSync(tempEntryPath);
     })
   );
 
   fs.unlinkSync(tempFilePath);
+
+  // Guarda los detalles de los archivos en Firestore
+  const batch = db.batch();
+  const filesCollectionRef = db.collection("filesData");
+  try {
+    fileData.forEach((file) => {
+      const docRef = filesCollectionRef.doc(); // Crea un nuevo doc en filesData
+      batch.set(docRef, file);
+    });
+
+    await batch.commit();
+
+    console.log("Zip file decompressed and data stored in Firestore.");
+    return null;
+  } catch (error) {
+    console.log("error =>", error.message);
+  }
   console.log("Zip file decompressed successfully.");
   return null;
 });
